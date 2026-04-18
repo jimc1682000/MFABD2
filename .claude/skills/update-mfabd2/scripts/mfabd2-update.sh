@@ -47,12 +47,12 @@ download_and_extract() {
 fix_macos_issues() {
     local new_dir="$1"
 
-    echo "Fixing permissions..."
-    chmod +x "$new_dir/MFAAvalonia"
-    chmod +x "$new_dir"/python/bin/python3* 2>/dev/null || true
-
     echo "Removing quarantine..."
     xattr -r -d com.apple.quarantine "$new_dir/" 2>/dev/null || true
+
+    echo "Setting initial permissions for pip install..."
+    chmod +x "$new_dir/MFAAvalonia"
+    chmod +x "$new_dir"/python/bin/python3* 2>/dev/null || true
 
     echo "Reinstalling numpy & pillow..."
     local site
@@ -62,6 +62,11 @@ fix_macos_issues() {
     rm -rf "$site/PIL" "$site"/Pillow-*.dist-info "$site"/pillow-*.dist-info
 
     "$new_dir/python/bin/python3" -m pip install --quiet numpy==1.26.4 pillow --target "$site" 2>&1 | tail -3
+
+    # Re-apply permissions after pip (pip may overwrite python3 binary)
+    echo "Re-applying permissions..."
+    chmod +x "$new_dir/MFAAvalonia"
+    chmod +x "$new_dir"/python/bin/python3* 2>/dev/null || true
 
     # Verify
     if "$new_dir/python/bin/python3" -c "import numpy; import PIL; print('OK: numpy', numpy.__version__, '| Pillow', PIL.__version__)" 2>&1; then
@@ -143,11 +148,20 @@ for patch in config["patches"]:
 
 for filename, patches in by_file.items():
     filepath = os.path.join(pipeline_dir, filename)
+    if not os.path.exists(filepath):
+        print(f"  {filename}: SKIP (file not found upstream)")
+        continue
+
     with open(filepath) as f:
         data = json.load(f)
 
     applied = 0
+    skipped_missing = 0
     for patch in patches:
+        if patch["node"] not in data:
+            skipped_missing += 1
+            continue
+
         node = data[patch["node"]]
         if "path" in patch:
             for part in re.split(r'\.', patch["path"]):
@@ -166,7 +180,10 @@ for filename, patches in by_file.items():
         json.dump(data, f, indent=4, ensure_ascii=False)
         f.write('\n')
 
-    print(f"  {filename}: {applied}/{len(patches)} patches applied")
+    summary = f"  {filename}: {applied}/{len(patches)} patches applied"
+    if skipped_missing:
+        summary += f" ({skipped_missing} skipped — node removed upstream)"
+    print(summary)
 PYEOF
 }
 
